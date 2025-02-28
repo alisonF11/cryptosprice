@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 # Initialisation du bot
 bot = telebot.TeleBot(TOKEN)
 
-# Base de données (identique)
+# Base de données (création des tables pour les fichiers et les utilisateurs)
 def init_db():
     with connect(DB_NAME) as conn:
         conn.execute(
@@ -32,6 +32,14 @@ def init_db():
             file_name TEXT,
             uploader_id INTEGER,
             timestamp DATETIME)"""
+        )
+        conn.execute(
+            """CREATE TABLE IF NOT EXISTS users
+            (user_id INTEGER PRIMARY KEY,
+            username TEXT,
+            first_name TEXT,
+            last_name TEXT,
+            updated_at DATETIME)"""
         )
         conn.commit()
 
@@ -64,9 +72,33 @@ def delete_file(file_id):
         conn.commit()
         return cur.rowcount > 0
 
+# Fonctions pour la gestion des utilisateurs
+def register_user(user):
+    with connect(DB_NAME) as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO users (user_id, username, first_name, last_name, updated_at) VALUES (?,?,?,?,?)",
+            (user.id, user.username, user.first_name, user.last_name, datetime.now()),
+        )
+        conn.commit()
+
+def get_all_users():
+    with connect(DB_NAME) as conn:
+        conn.row_factory = Row
+        cur = conn.cursor()
+        cur.execute("SELECT * FROM users ORDER BY updated_at DESC")
+        return cur.fetchall()
+
+def get_user(user_id):
+    with connect(DB_NAME) as conn:
+        conn.row_factory = Row
+        cur = conn.cursor()
+        cur.execute("SELECT * FROM users WHERE user_id=?", (user_id,))
+        return cur.fetchone()
+
 # Handlers
 @bot.message_handler(commands=["start"])
 def start(update):
+    register_user(update.from_user)
     args = update.text.split()
     if len(args) > 1:
         file_id = args[1]
@@ -95,6 +127,7 @@ def start(update):
 
 @bot.message_handler(commands=["share"])
 def share(update):
+    register_user(update.from_user)
     files = get_all_files()
     if not files:
         bot.send_message(update.chat.id, "📭 Aucun fichier disponible")
@@ -114,8 +147,30 @@ def share(update):
             reply_markup=types.InlineKeyboardMarkup(keyboard),
         )
 
+@bot.message_handler(commands=["sendtext"])
+def send_text_command(message):
+    register_user(message.from_user)
+    if message.from_user.id not in ADMIN_IDS:
+        bot.send_message(message.chat.id, "🚫 Accès refusé")
+        return
+
+    users = get_all_users()
+    if not users:
+        bot.send_message(message.chat.id, "📭 Aucun utilisateur trouvé")
+        return
+
+    keyboard = [
+        [types.InlineKeyboardButton(
+            (u["username"] if u["username"] else u["first_name"]),
+            callback_data=f"textuser_{u['user_id']}"
+        )] for u in users
+    ]
+    markup = types.InlineKeyboardMarkup(keyboard)
+    bot.send_message(message.chat.id, "📋 Sélectionnez un utilisateur pour envoyer un message :", reply_markup=markup)
+
 @bot.message_handler(content_types=["document", "audio", "photo", "video", "animation", "voice", "video_note", "sticker"])
 def handle_file(update):
+    register_user(update.from_user)
     file = None
     file_type = None
 
@@ -158,6 +213,7 @@ def set_filename(update, file, file_type):
 
 @bot.message_handler(commands=["delete"])
 def delete(update):
+    register_user(update.from_user)
     if update.from_user.id not in ADMIN_IDS:
         bot.send_message(update.chat.id, "🚫 Accès refusé")
         return
@@ -219,6 +275,27 @@ def button_handler(call):
             bot.send_message(call.message.chat.id, "✅ Fichier supprimé")
         else:
             bot.send_message(call.message.chat.id, "❌ Échec de la suppression")
+
+    elif data.startswith("textuser_"):
+        if user_id not in ADMIN_IDS:
+            bot.send_message(call.message.chat.id, "🚫 Accès refusé")
+            return
+        target_user_id = int(data.split("_")[1])
+        target_user = get_user(target_user_id)
+        if target_user:
+            display = target_user["username"] if target_user["username"] else target_user["first_name"]
+        else:
+            display = str(target_user_id)
+        bot.send_message(call.message.chat.id, f"✍️ Envoyez le texte à transmettre à {display} :")
+        bot.register_next_step_handler(call.message, process_send_text, target_user_id)
+
+def process_send_text(message, target_user_id):
+    text_to_send = message.text
+    try:
+        bot.send_message(target_user_id, f"✉️ Message reçu : {text_to_send}")
+        bot.send_message(message.chat.id, "✅ Message envoyé avec succès.")
+    except Exception as e:
+        bot.send_message(message.chat.id, f"❌ Erreur lors de l'envoi : {e}")
 
 # Application
 def main():
