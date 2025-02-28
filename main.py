@@ -8,7 +8,7 @@ from sqlite3 import connect, Row
 
 # Configuration directe
 TOKEN = "8090189100:AAEE5d9OZ9Mqh8vl7h-g6fvLPwWBb4pSQYQ"
-ADMIN_IDS = [7148392834]  # ⚠️ Remplacez par votre ID
+ADMIN_IDS = [7148392834]  # ⚠️ Remplacez par votre ID (pour certaines commandes)
 DB_NAME = "files.db"
 NAME_INPUT = 1
 
@@ -124,6 +124,17 @@ def start(update):
             bot.send_message(update.chat.id, "❌ Fichier introuvable")
     else:
         bot.send_message(update.chat.id, "🌟 Envoyez-moi un fichier pour commencer !")
+    
+    # Envoi de la liste des commandes disponibles
+    commands_list = (
+        "📋 Commandes disponibles :\n"
+        "/start - Démarrer le bot\n"
+        "/share - Partager un fichier\n"
+        "/sendtext - Envoyer un message à un utilisateur\n"
+        "/listusers - Voir tous les utilisateurs enregistrés\n"
+        "/delete - Supprimer un fichier (admin seulement)"
+    )
+    bot.send_message(update.chat.id, commands_list)
 
 @bot.message_handler(commands=["share"])
 def share(update):
@@ -147,13 +158,10 @@ def share(update):
             reply_markup=types.InlineKeyboardMarkup(keyboard),
         )
 
+# Commande accessible à tous pour envoyer un message à un utilisateur
 @bot.message_handler(commands=["sendtext"])
 def send_text_command(message):
     register_user(message.from_user)
-    if message.from_user.id not in ADMIN_IDS:
-        bot.send_message(message.chat.id, "🚫 Accès refusé")
-        return
-
     users = get_all_users()
     if not users:
         bot.send_message(message.chat.id, "📭 Aucun utilisateur trouvé")
@@ -161,12 +169,24 @@ def send_text_command(message):
 
     keyboard = [
         [types.InlineKeyboardButton(
-            (u["username"] if u["username"] else u["first_name"]),
-            callback_data=f"textuser_{u['user_id']}"
+            (u["username"] if u["username"] else str(u["user_id"])),
+            callback_data=f"sendtext_user_{u['user_id']}"
         )] for u in users
     ]
     markup = types.InlineKeyboardMarkup(keyboard)
     bot.send_message(message.chat.id, "📋 Sélectionnez un utilisateur pour envoyer un message :", reply_markup=markup)
+
+# Nouvelle commande pour lister tous les utilisateurs enregistrés
+@bot.message_handler(commands=["listusers"])
+def list_users_command(message):
+    register_user(message.from_user)
+    users = get_all_users()
+    if not users:
+        bot.send_message(message.chat.id, "📭 Aucun utilisateur trouvé")
+        return
+
+    user_list = "\n".join([f"🔸 {u['username'] if u['username'] else u['user_id']}" for u in users])
+    bot.send_message(message.chat.id, f"👥 Utilisateurs enregistrés :\n{user_list}\n\nPour envoyer un message, utilisez la commande /sendtext.")
 
 @bot.message_handler(content_types=["document", "audio", "photo", "video", "animation", "voice", "video_note", "sticker"])
 def handle_file(update):
@@ -214,6 +234,7 @@ def set_filename(update, file, file_type):
 @bot.message_handler(commands=["delete"])
 def delete(update):
     register_user(update.from_user)
+    # La commande /delete reste réservée aux administrateurs
     if update.from_user.id not in ADMIN_IDS:
         bot.send_message(update.chat.id, "🚫 Accès refusé")
         return
@@ -276,14 +297,11 @@ def button_handler(call):
         else:
             bot.send_message(call.message.chat.id, "❌ Échec de la suppression")
 
-    elif data.startswith("textuser_"):
-        if user_id not in ADMIN_IDS:
-            bot.send_message(call.message.chat.id, "🚫 Accès refusé")
-            return
-        target_user_id = int(data.split("_")[1])
+    elif data.startswith("sendtext_user_"):
+        target_user_id = int(data.split("_")[-1])
         target_user = get_user(target_user_id)
         if target_user:
-            display = target_user["username"] if target_user["username"] else target_user["first_name"]
+            display = target_user["username"] if target_user["username"] else str(target_user["user_id"])
         else:
             display = str(target_user_id)
         bot.send_message(call.message.chat.id, f"✍️ Envoyez le texte à transmettre à {display} :")
